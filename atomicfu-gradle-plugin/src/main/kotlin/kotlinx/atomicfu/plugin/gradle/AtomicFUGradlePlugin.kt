@@ -18,6 +18,8 @@ import org.jetbrains.kotlin.gradle.plugin.*
 import java.io.*
 import java.util.*
 import java.util.concurrent.*
+import org.jetbrains.kotlin.gradle.targets.js.*
+import org.jetbrains.kotlin.gradle.targets.js.ir.KotlinJsIrTarget
 
 private const val EXTENSION_NAME = "atomicfu"
 private const val ORIGINAL_DIR_NAME = "originalClassesDir"
@@ -49,9 +51,30 @@ private fun Project.configureDependencies() {
             getAtomicfuDependencyNotation(Platform.JS, version)
         )
         dependencies.add(TEST_IMPLEMENTATION_CONFIGURATION, getAtomicfuDependencyNotation(Platform.JS, version))
+        addCompilerPluginDependency()
+    }
+    withPluginWhenEvaluatedDependencies("org.jetbrains.kotlin.js") { version ->
+        dependencies.add(
+            if (config.transformJs) COMPILE_ONLY_CONFIGURATION else IMPLEMENTATION_CONFIGURATION,
+            getAtomicfuDependencyNotation(Platform.JS, version)
+        )
+        dependencies.add(TEST_IMPLEMENTATION_CONFIGURATION, getAtomicfuDependencyNotation(Platform.JS, version))
+        addCompilerPluginDependency()
     }
     withPluginWhenEvaluatedDependencies("kotlin-multiplatform") { version ->
         configureMultiplatformPluginDependencies(version)
+    }
+}
+
+private fun Project.addCompilerPluginDependency() {
+    val kotlinVersion = rootProject.buildscript.configurations.findByName("classpath")
+        ?.allDependencies?.find { it.name == "kotlin-gradle-plugin" }?.version
+    withKotlinTargets { target ->
+        target.compilations.forEach { kotlinCompilation ->
+            kotlinCompilation.dependencies {
+                implementation("org.jetbrains.kotlin:atomicfu:$kotlinVersion")
+            }
+        }
     }
 }
 
@@ -114,6 +137,8 @@ private val Project.config: AtomicFUPluginExtension
 private fun getAtomicfuDependencyNotation(platform: Platform, version: String): String =
     "org.jetbrains.kotlinx:atomicfu${platform.suffix}:$version"
 
+private fun KotlinTarget.isJsIrTarget() = (this is KotlinJsTarget && this.irTarget != null) || this is KotlinJsIrTarget
+
 // Note "afterEvaluate" does nothing when the project is already in executed state, so we need
 // a special check for this case
 fun <T> Project.whenEvaluated(fn: Project.() -> T) {
@@ -138,9 +163,9 @@ fun Project.withKotlinTargets(fn: (KotlinTarget) -> Unit) {
     extensions.findByType(KotlinProjectExtension::class.java)?.let { kotlinExtension ->
         val targetsExtension = (kotlinExtension as? ExtensionAware)?.extensions?.findByName("targets")
         @Suppress("UNCHECKED_CAST")
-        val targets = targetsExtension as NamedDomainObjectContainer<KotlinTarget>
+        val targets = targetsExtension as? NamedDomainObjectContainer<KotlinTarget>
         // find all compilations given sourceSet belongs to
-        targets.all { target -> fn(target) }
+        targets?.all { target -> fn(target) }
     }
 }
 
@@ -182,7 +207,7 @@ fun Project.configureMultiplatformPluginTasks() {
                     )
                 }
                 KotlinPlatformType.js -> {
-                    if (!config.transformJs) return@compilations // skip when transformation is turned off
+                    if ((target.isJsIrTarget() && config.transformJsIr) || !config.transformJs) return@compilations
                     project.createJsTransformTask(compilation).configureJsTask(
                         compilation.compileAllTaskName,
                         transformedClassesDir,
@@ -235,14 +260,15 @@ fun Project.sourceSetsByCompilation(): Map<KotlinSourceSet, List<KotlinCompilati
 
 fun Project.configureMultiplatformPluginDependencies(version: String) {
     if (rootProject.findProperty("kotlin.mpp.enableGranularSourceSetsMetadata").toString().toBoolean()) {
+        addCompilerPluginDependency()
         val mainConfigurationName = project.extensions.getByType(KotlinMultiplatformExtension::class.java).sourceSets
-                .getByName(KotlinSourceSet.COMMON_MAIN_SOURCE_SET_NAME)
-                .compileOnlyConfigurationName
+            .getByName(KotlinSourceSet.COMMON_MAIN_SOURCE_SET_NAME)
+            .compileOnlyConfigurationName
         dependencies.add(mainConfigurationName, getAtomicfuDependencyNotation(Platform.MULTIPLATFORM, version))
 
         val testConfigurationName = project.extensions.getByType(KotlinMultiplatformExtension::class.java).sourceSets
-                .getByName(KotlinSourceSet.COMMON_TEST_SOURCE_SET_NAME)
-                .implementationConfigurationName
+            .getByName(KotlinSourceSet.COMMON_TEST_SOURCE_SET_NAME)
+            .implementationConfigurationName
         dependencies.add(testConfigurationName, getAtomicfuDependencyNotation(Platform.MULTIPLATFORM, version))
 
         // For each source set that is only used in Native compilations, add an implementation dependency so that it
@@ -258,20 +284,22 @@ fun Project.configureMultiplatformPluginDependencies(version: String) {
         }
     } else {
         sourceSetsByCompilation().forEach { (sourceSet, compilations) ->
+            addCompilerPluginDependency()
             val platformTypes = compilations.map { it.platformType }.toSet()
             val compilationNames = compilations.map { it.compilationName }.toSet()
             if (compilationNames.size != 1)
                 error("Source set '${sourceSet.name}' of project '$name' is part of several compilations $compilationNames")
             val compilationType = compilationNames.single().compilationNameToType()
-                    ?: return@forEach // skip unknown compilations
+                ?: return@forEach // skip unknown compilations
             val platform =
-                    if (platformTypes.size > 1) Platform.MULTIPLATFORM else // mix of platform types -> "common"
-                        when (platformTypes.single()) {
-                            KotlinPlatformType.common -> Platform.MULTIPLATFORM
-                            KotlinPlatformType.jvm, KotlinPlatformType.androidJvm -> Platform.JVM
-                            KotlinPlatformType.js -> Platform.JS
-                            KotlinPlatformType.native -> Platform.NATIVE
-                        }
+                if (platformTypes.size > 1) Platform.MULTIPLATFORM else // mix of platform types -> "common"
+                    when (platformTypes.single()) {
+                        KotlinPlatformType.common -> Platform.MULTIPLATFORM
+                        KotlinPlatformType.jvm, KotlinPlatformType.androidJvm -> Platform.JVM
+                        KotlinPlatformType.js -> Platform.JS
+                        KotlinPlatformType.native -> Platform.NATIVE
+                        else -> error("Unsupported transformation platform '${platformTypes.single()}'")
+                    }
             val configurationName = when {
                 // impl dependency for native (there is no transformation)
                 platform == Platform.NATIVE -> sourceSet.implementationConfigurationName
@@ -395,6 +423,7 @@ class AtomicFUPluginExtension(pluginVersion: String?) {
     var dependenciesVersion = pluginVersion
     var transformJvm = true
     var transformJs = true
+    var transformJsIr = true // apply atomicfu compiler plugin for JS IR targets
     var variant: String = "FU"
     var verbose: Boolean = false
 }

@@ -31,10 +31,10 @@ buildscript {
 
     repositories {
         jcenter()
+        maven { url "https://maven.pkg.jetbrains.space/kotlin/p/kotlin/dev" }
         maven { url "https://plugins.gradle.org/m2/" }
         // Future replacement for kotlin-dev, with cache redirector
         maven { url "https://cache-redirector.jetbrains.com/maven.pkg.jetbrains.space/kotlin/p/kotlin/dev" }
-        maven { url "https://maven.pkg.jetbrains.space/kotlin/p/kotlin/dev" }
     }
     
     dependencies {
