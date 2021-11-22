@@ -20,6 +20,7 @@ import java.util.*
 import java.util.concurrent.*
 import org.jetbrains.kotlin.gradle.targets.js.*
 import org.jetbrains.kotlin.gradle.targets.js.ir.KotlinJsIrTarget
+import org.jetbrains.kotlinx.atomicfu.gradle.*
 
 private const val EXTENSION_NAME = "atomicfu"
 private const val ORIGINAL_DIR_NAME = "originalClassesDir"
@@ -67,6 +68,7 @@ private fun Project.configureDependencies() {
 }
 
 private fun Project.addCompilerPluginDependency() {
+    project.plugins.apply(AtomicfuKotlinGradleSubplugin::class.java)
     val kotlinVersion = rootProject.buildscript.configurations.findByName("classpath")
         ?.allDependencies?.find { it.name == "kotlin-gradle-plugin" }?.version
     withKotlinTargets { target ->
