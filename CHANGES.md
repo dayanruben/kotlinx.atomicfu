@@ -1,5 +1,8 @@
 # Change log for kotlinx.atomicfu
 
+# Version 0.32.0
+* `SynchronizedObject` implementation was reverted to version `0.29.0` to resolve a performance regression (See #584 for details)
+
 # Version 0.31.0
 * Reworked dependencies for the Gradle plugin to make it work with the latest Kotlin versions (#569)
 * Changed a dependency type for test configurations to suppress compile-time warnings in dependant projects (#570)
